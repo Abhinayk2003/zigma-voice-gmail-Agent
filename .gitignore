@@ -1,0 +1,91 @@
+# =========================================================
+# Python
+# =========================================================
+
+__pycache__/
+*.py[cod]
+*.pyo
+*.so
+
+# Virtual environments
+venv/
+.venv/
+
+# =========================================================
+# Environment variables / secrets
+# =========================================================
+
+.env
+.env.*
+!.env.example
+
+# OAuth / credentials / local secrets
+credentials.json
+token.json
+client_secret*.json
+secrets.json
+cookies.txt
+
+# =========================================================
+# IDE
+# =========================================================
+
+.vscode/
+.idea/
+
+# =========================================================
+# OS
+# =========================================================
+
+.DS_Store
+Thumbs.db
+
+# =========================================================
+# Logs / crash dumps
+# =========================================================
+
+*.log
+hs_err_pid*.log
+
+# =========================================================
+# Python testing / coverage
+# =========================================================
+
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# =========================================================
+# Node / frontend
+# =========================================================
+
+node_modules/
+.next/
+dist/
+build/
+.vite/
+
+# =========================================================
+# Temporary / backup files
+# =========================================================
+
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+
+*.before_draft
+*.before_draft.*
+
+# Project-specific temporary / generated files
+*.backup
+*.before_draft
+*.zip
+
+# AWS AgentCore generated deployment state
+backend/zigmaGmail/agentcore/.cli/
+
+# Accidental shell-command/output files
+backend/rds describe-db-instances \

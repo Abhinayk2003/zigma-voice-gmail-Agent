@@ -6,7 +6,7 @@ from typing import Any
 
 
 # =============================================================
-# Canonical Gmail intent
+# Canonical Gmail / Knowledge Base intent
 # =============================================================
 
 
@@ -23,6 +23,39 @@ class GmailIntent(str, Enum):
     MARK_UNREAD = "mark_unread"
     LIST_UNREAD = "list_unread"
     THREAD = "thread"
+
+    # ---------------------------------------------------------
+    # Knowledge Base
+    # ---------------------------------------------------------
+    #
+    # Used when the user asks a question that should be answered
+    # from the Amazon Bedrock Knowledge Base rather than Gmail.
+    #
+    # Example:
+    #
+    # "What is the leave policy?"
+    # "According to the company documents, what is the process?"
+    #
+    # The actual Knowledge Base retrieval is NOT performed here.
+    # The orchestrator/service layer handles that.
+    # ---------------------------------------------------------
+
+    KNOWLEDGE_BASE = "knowledge_base"
+
+    # ---------------------------------------------------------
+    # Business / Customer Data
+    # ---------------------------------------------------------
+    #
+    # Used when the user asks for specific business records such
+    # as orders, customers, shipments, payments, deliveries,
+    # returns, refunds, etc.
+    #
+    # BusinessAgent is responsible for dynamically resolving the
+    # actual record from the business database.
+    # ---------------------------------------------------------
+
+    BUSINESS_QUERY = "business_query"
+
     UNKNOWN = "unknown"
 
 
@@ -86,6 +119,8 @@ class GmailIntentRequest:
         - Gmail thread ID resolution
         - conversation references
         - authenticated account handling
+        - Knowledge Base retrieval
+        - BusinessAgent / business database resolution
 
     remains outside this class.
     """
@@ -97,7 +132,7 @@ class GmailIntentRequest:
     intent: GmailIntent = GmailIntent.UNKNOWN
 
     # ---------------------------------------------------------
-    # Search
+    # Search / Knowledge Base query
     # ---------------------------------------------------------
 
     query: str | None = None
@@ -170,6 +205,9 @@ class GmailIntentRequest:
         LIST_UNREAD is intentionally excluded because it
         retrieves a collection of unread messages and does
         not target one specific message.
+
+        KNOWLEDGE_BASE is also excluded because it does not
+        operate on a Gmail message.
         """
 
         return self.intent in {
@@ -209,6 +247,22 @@ class GmailIntentRequest:
         """
 
         return self.intent == GmailIntent.LIST_UNREAD
+
+    def is_knowledge_base(self) -> bool:
+        """
+        Return True when the request should be answered using
+        the Amazon Bedrock Knowledge Base.
+        """
+
+        return self.intent == GmailIntent.KNOWLEDGE_BASE
+
+    def is_business_query(self) -> bool:
+        """
+        Return True when the request requires information from
+        the structured business/customer database.
+        """
+
+        return self.intent == GmailIntent.BUSINESS_QUERY
 
     def has_body(self) -> bool:
         """
@@ -252,7 +306,10 @@ class GmailIntentRequest:
 
     def has_query(self) -> bool:
         """
-        Return True when a non-empty Gmail search query exists.
+        Return True when a non-empty query exists.
+
+        This applies to Gmail SEARCH, KNOWLEDGE_BASE, and
+        BUSINESS_QUERY requests.
         """
 
         return bool(
@@ -275,6 +332,24 @@ def normalize_intent(
     Natural-language aliases are intentionally NOT handled here.
 
     Bedrock is responsible for understanding natural language.
+
+    Supported canonical values include:
+
+        search
+        read
+        send
+        draft
+        reply
+        star
+        unstar
+        delete
+        mark_read
+        mark_unread
+        list_unread
+        thread
+        knowledge_base
+        business_query
+        unknown
     """
 
     if isinstance(
@@ -393,6 +468,8 @@ def normalize_message_reference(
             "mail",
             "message",
             "messages",
+            "thread",
+            "threads",
         }
 
         meaningful_words = [
@@ -410,11 +487,13 @@ def normalize_message_reference(
         # -----------------------------------------------------
 
         if reference_text.isdigit():
+
             position = int(
                 reference_text
             )
 
             if position > 0:
+
                 return MessageReference(
                     type=MessageReferenceType.POSITION,
                     position=position,
@@ -451,6 +530,7 @@ def normalize_message_reference(
         }
 
         if reference_text in ordinal_positions:
+
             position = ordinal_positions[
                 reference_text
             ]
@@ -479,9 +559,12 @@ def normalize_message_reference(
         }
 
         if reference_text in contextual_references:
-            reference_type = contextual_references[
-                reference_text
-            ]
+
+            reference_type = (
+                contextual_references[
+                    reference_text
+                ]
+            )
 
             return MessageReference(
                 type=reference_type,
@@ -519,11 +602,13 @@ def normalize_message_reference(
     # ---------------------------------------------------------
 
     try:
+
         reference_type = MessageReferenceType(
             reference_type.strip().lower()
         )
 
     except ValueError:
+
         return MessageReference()
 
     # ---------------------------------------------------------
@@ -534,11 +619,13 @@ def normalize_message_reference(
         reference_type
         == MessageReferenceType.POSITION
     ):
+
         position = value.get(
             "position"
         )
 
         try:
+
             position = int(
                 position
             )
@@ -547,9 +634,11 @@ def normalize_message_reference(
             TypeError,
             ValueError,
         ):
+
             return MessageReference()
 
         if position <= 0:
+
             return MessageReference()
 
         raw = value.get(
@@ -599,6 +688,7 @@ def _clean(
     """
 
     if value is None:
+
         return None
 
     value = str(
@@ -618,9 +708,11 @@ def _positive_int(
     """
 
     if value is None:
+
         return None
 
     try:
+
         value = int(
             value
         )
@@ -629,6 +721,7 @@ def _positive_int(
         TypeError,
         ValueError,
     ):
+
         return None
 
     return (
@@ -646,6 +739,7 @@ def _confidence(
     """
 
     try:
+
         value = float(
             value
         )
@@ -654,6 +748,7 @@ def _confidence(
         TypeError,
         ValueError,
     ):
+
         value = 0.0
 
     return max(
@@ -706,6 +801,7 @@ def _extract_message_reference(
     # ---------------------------------------------------------
 
     if reference is None:
+
         reference = data.get(
             "message_reference"
         )
@@ -715,6 +811,7 @@ def _extract_message_reference(
     # ---------------------------------------------------------
 
     if reference is None:
+
         return None
 
     # ---------------------------------------------------------
@@ -725,14 +822,19 @@ def _extract_message_reference(
         reference,
         str,
     ):
-        reference_type = reference.strip().lower()
+
+        reference_type = (
+            reference.strip().lower()
+        )
 
         if reference_type == "position":
+
             position = _positive_int(
                 data.get("position")
             )
 
             if position is not None:
+
                 return {
                     "type": "position",
                     "position": position,
@@ -744,6 +846,7 @@ def _extract_message_reference(
             "latest",
             "none",
         }:
+
             return {
                 "type": reference_type,
             }
@@ -768,12 +871,21 @@ def parse_bedrock_intent(
 
     No Gmail account, message ID, thread ID or other
     user-specific identifier is generated here.
+
+    For KNOWLEDGE_BASE requests, the query is preserved as
+    the user's knowledge question. Actual retrieval is handled
+    by the KnowledgeBaseService.
+
+    For BUSINESS_QUERY requests, the query is preserved as
+    the user's business question. BusinessAgent is responsible
+    for dynamic identifier extraction and database resolution.
     """
 
     if not isinstance(
         data,
         dict,
     ):
+
         raise ValueError(
             "Bedrock intent must be a JSON object."
         )
@@ -827,11 +939,13 @@ def parse_bedrock_intent(
         and thread_reference_data.strip().lower()
         == "position"
     ):
+
         thread_position = _positive_int(
             data.get("thread_position")
         )
 
         if thread_position is not None:
+
             thread_reference_data = {
                 "type": "position",
                 "position": thread_position,
@@ -855,13 +969,14 @@ def parse_bedrock_intent(
         metadata,
         dict,
     ):
+
         metadata = {}
 
     # ---------------------------------------------------------
     # Build request
     # ---------------------------------------------------------
 
-    return GmailIntentRequest(
+    request = GmailIntentRequest(
         intent=intent,
 
         query=_clean(
@@ -915,3 +1030,82 @@ def parse_bedrock_intent(
 
         metadata=metadata,
     )
+
+    # ---------------------------------------------------------
+    # Knowledge Base normalization
+    # ---------------------------------------------------------
+    #
+    # A KB request needs a usable query.
+    #
+    # Bedrock should normally return:
+    #
+    # {
+    #     "intent": "knowledge_base",
+    #     "query": "leave policy",
+    #     "confidence": 0.95
+    # }
+    #
+    # If query is missing, use the original user text as the
+    # retrieval query. This keeps the implementation dynamic
+    # and avoids hard-coding particular questions.
+    # ---------------------------------------------------------
+
+    if request.intent == GmailIntent.KNOWLEDGE_BASE:
+
+        if not request.has_query():
+
+            fallback_query = _clean(
+                raw_text
+            )
+
+            if fallback_query:
+
+                request.query = fallback_query
+
+        # -----------------------------------------------------
+        # KB requests do not operate on Gmail messages.
+        # -----------------------------------------------------
+
+        request.message_reference = (
+            MessageReference()
+        )
+
+        request.thread_reference = (
+            MessageReference()
+        )
+
+    # ---------------------------------------------------------
+    # Business Query normalization
+    # ---------------------------------------------------------
+    #
+    # Business questions are handled by BusinessAgent. We only
+    # preserve a usable natural-language query here and make
+    # sure the request is not treated as a Gmail message/thread
+    # operation.
+    # ---------------------------------------------------------
+
+    elif request.intent == GmailIntent.BUSINESS_QUERY:
+
+        if not request.has_query():
+
+            fallback_query = _clean(
+                raw_text
+            )
+
+            if fallback_query:
+
+                request.query = fallback_query
+
+        # -----------------------------------------------------
+        # Business queries do not operate on Gmail messages.
+        # -----------------------------------------------------
+
+        request.message_reference = (
+            MessageReference()
+        )
+
+        request.thread_reference = (
+            MessageReference()
+        )
+
+    return request

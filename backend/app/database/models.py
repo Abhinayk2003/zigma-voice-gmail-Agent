@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
+from typing import Any
 
 from sqlalchemy import (
     Boolean,
@@ -9,28 +11,21 @@ from sqlalchemy import (
     Index,
     Integer,
     JSON,
+    Numeric,
     String,
     Text,
-    UniqueConstraint,
+    func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database.base import Base
 
 
-# =========================================================
-# Users
-# =========================================================
+# ============================================================
+# USER
+# ============================================================
 
 class User(Base):
-    """
-    Application user.
-
-    Stores identity information only.
-
-    OAuth credentials/tokens must NOT be stored here.
-    """
-
     __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(
@@ -58,56 +53,37 @@ class User(Base):
     )
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime,
+        DateTime(timezone=True),
         nullable=False,
-        default=datetime.utcnow,
+        server_default=func.now(),
     )
 
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime,
+        DateTime(timezone=True),
         nullable=False,
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow,
+        server_default=func.now(),
+        onupdate=func.now(),
     )
 
-    # -----------------------------------------------------
-    # Relationships
-    # -----------------------------------------------------
-
-    gmail_accounts: Mapped[list["GmailAccount"]] = relationship(
+    gmail_accounts = relationship(
+        "GmailAccount",
         back_populates="user",
         cascade="all, delete-orphan",
     )
 
-    conversations: Mapped[list["Conversation"]] = relationship(
+    conversations = relationship(
+        "Conversation",
         back_populates="user",
         cascade="all, delete-orphan",
     )
 
 
-# =========================================================
-# Gmail Accounts
-# =========================================================
+# ============================================================
+# GMAIL ACCOUNT
+# ============================================================
 
 class GmailAccount(Base):
-    """
-    Gmail account connected to an application user.
-
-    Only account metadata is stored here.
-
-    Gmail OAuth tokens/credentials are intentionally NOT
-    stored in PostgreSQL.
-    """
-
     __tablename__ = "gmail_accounts"
-
-    __table_args__ = (
-        UniqueConstraint(
-            "user_id",
-            "email",
-            name="uq_gmail_account_user_email",
-        ),
-    )
 
     id: Mapped[int] = mapped_column(
         Integer,
@@ -116,10 +92,7 @@ class GmailAccount(Base):
     )
 
     user_id: Mapped[int] = mapped_column(
-        ForeignKey(
-            "users.id",
-            ondelete="CASCADE",
-        ),
+        ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -143,48 +116,34 @@ class GmailAccount(Base):
     )
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime,
+        DateTime(timezone=True),
         nullable=False,
-        default=datetime.utcnow,
+        server_default=func.now(),
     )
 
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime,
+        DateTime(timezone=True),
         nullable=False,
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow,
+        server_default=func.now(),
+        onupdate=func.now(),
     )
 
-    # -----------------------------------------------------
-    # Relationships
-    # -----------------------------------------------------
-
-    user: Mapped["User"] = relationship(
+    user = relationship(
+        "User",
         back_populates="gmail_accounts",
     )
 
-    conversations: Mapped[list["Conversation"]] = relationship(
+    conversations = relationship(
+        "Conversation",
         back_populates="gmail_account",
     )
 
 
-# =========================================================
-# Conversations
-# =========================================================
+# ============================================================
+# CONVERSATION
+# ============================================================
 
 class Conversation(Base):
-    """
-    Application-level conversation/session.
-
-    IMPORTANT:
-
-    The actual conversational memory should be handled by
-    AgentCore Memory.
-
-    PostgreSQL keeps the durable application-level reference
-    and associates actions/workflows with this conversation.
-    """
-
     __tablename__ = "conversations"
 
     id: Mapped[int] = mapped_column(
@@ -194,19 +153,13 @@ class Conversation(Base):
     )
 
     user_id: Mapped[int] = mapped_column(
-        ForeignKey(
-            "users.id",
-            ondelete="CASCADE",
-        ),
+        ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
 
     gmail_account_id: Mapped[int | None] = mapped_column(
-        ForeignKey(
-            "gmail_accounts.id",
-            ondelete="SET NULL",
-        ),
+        ForeignKey("gmail_accounts.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
@@ -223,64 +176,52 @@ class Conversation(Base):
     )
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime,
+        DateTime(timezone=True),
         nullable=False,
-        default=datetime.utcnow,
+        server_default=func.now(),
     )
 
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime,
+        DateTime(timezone=True),
         nullable=False,
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow,
+        server_default=func.now(),
+        onupdate=func.now(),
     )
 
-    # -----------------------------------------------------
-    # Relationships
-    # -----------------------------------------------------
-
-    user: Mapped["User"] = relationship(
+    user = relationship(
+        "User",
         back_populates="conversations",
     )
 
-    gmail_account: Mapped["GmailAccount | None"] = relationship(
+    gmail_account = relationship(
+        "GmailAccount",
         back_populates="conversations",
     )
 
-    messages: Mapped[list["ConversationMessage"]] = relationship(
+    messages = relationship(
+        "ConversationMessage",
         back_populates="conversation",
         cascade="all, delete-orphan",
     )
 
-    actions: Mapped[list["ConversationAction"]] = relationship(
+    workflows = relationship(
+        "ConversationWorkflow",
         back_populates="conversation",
         cascade="all, delete-orphan",
     )
 
-    workflows: Mapped[list["ConversationWorkflow"]] = relationship(
+    actions = relationship(
+        "ConversationAction",
         back_populates="conversation",
         cascade="all, delete-orphan",
     )
 
 
-# =========================================================
-# Conversation Messages
-# =========================================================
+# ============================================================
+# CONVERSATION MESSAGE
+# ============================================================
 
 class ConversationMessage(Base):
-    """
-    Legacy/persistent message history.
-
-    AgentCore Memory is the primary conversational memory
-    system for the Zigma agent.
-
-    This table is retained for compatibility, auditing,
-    migration, or optional application-level history.
-
-    The agent should NOT depend on this table as its primary
-    conversation-memory mechanism.
-    """
-
     __tablename__ = "conversation_messages"
 
     id: Mapped[int] = mapped_column(
@@ -290,10 +231,7 @@ class ConversationMessage(Base):
     )
 
     conversation_id: Mapped[int] = mapped_column(
-        ForeignKey(
-            "conversations.id",
-            ondelete="CASCADE",
-        ),
+        ForeignKey("conversations.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -314,73 +252,23 @@ class ConversationMessage(Base):
     )
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime,
+        DateTime(timezone=True),
         nullable=False,
-        default=datetime.utcnow,
-        index=True,
+        server_default=func.now(),
     )
 
-    # -----------------------------------------------------
-    # Relationships
-    # -----------------------------------------------------
-
-    conversation: Mapped["Conversation"] = relationship(
+    conversation = relationship(
+        "Conversation",
         back_populates="messages",
     )
 
 
-# =========================================================
-# Conversation Actions
-# =========================================================
+# ============================================================
+# CONVERSATION WORKFLOW
+# ============================================================
 
-class ConversationAction(Base):
-    """
-    Durable Gmail action/audit record.
-
-    This is one of the most important PostgreSQL tables
-    for the Zigma Gmail Agent.
-
-    Examples:
-
-        send
-        reply
-        delete
-        archive
-        star
-        unstar
-        mark_read
-        mark_unread
-        search
-        read
-
-    The table stores structured Gmail identifiers and
-    action metadata.
-
-    It also supports persistent destructive-action
-    confirmation.
-    """
-
-    __tablename__ = "conversation_actions"
-
-    __table_args__ = (
-        Index(
-            "ix_action_conversation_created",
-            "conversation_id",
-            "created_at",
-        ),
-        Index(
-            "ix_action_gmail_message",
-            "gmail_message_id",
-        ),
-        Index(
-            "ix_action_gmail_thread",
-            "gmail_thread_id",
-        ),
-        Index(
-            "ix_action_status",
-            "status",
-        ),
-    )
+class ConversationWorkflow(Base):
+    __tablename__ = "conversation_workflows"
 
     id: Mapped[int] = mapped_column(
         Integer,
@@ -389,34 +277,89 @@ class ConversationAction(Base):
     )
 
     conversation_id: Mapped[int] = mapped_column(
-        ForeignKey(
-            "conversations.id",
-            ondelete="CASCADE",
-        ),
+        ForeignKey("conversations.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
 
-    # -----------------------------------------------------
-    # Action
-    # -----------------------------------------------------
-
-    action_type: Mapped[str] = mapped_column(
+    workflow_type: Mapped[str] = mapped_column(
         String(100),
         nullable=False,
-        index=True,
     )
 
     status: Mapped[str] = mapped_column(
         String(50),
         nullable=False,
-        default="success",
+    )
+
+    required_field: Mapped[str | None] = mapped_column(
+        String(100),
+        nullable=True,
+    )
+
+    collected_data: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON,
+        nullable=True,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    conversation = relationship(
+        "Conversation",
+        back_populates="workflows",
+    )
+
+
+# ============================================================
+# CONVERSATION ACTION
+# ============================================================
+
+class ConversationAction(Base):
+    __tablename__ = "conversation_actions"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        autoincrement=True,
+    )
+
+    conversation_id: Mapped[int] = mapped_column(
+        ForeignKey("conversations.id", ondelete="CASCADE"),
+        nullable=False,
         index=True,
     )
 
-    # -----------------------------------------------------
-    # Gmail identifiers
-    # -----------------------------------------------------
+    action_type: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False,
+    )
+
+    status: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+    )
+
+    details: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
 
     gmail_message_id: Mapped[str | None] = mapped_column(
         String(255),
@@ -427,10 +370,6 @@ class ConversationAction(Base):
         String(255),
         nullable=True,
     )
-
-    # -----------------------------------------------------
-    # Email information
-    # -----------------------------------------------------
 
     sender: Mapped[str | None] = mapped_column(
         String(320),
@@ -447,72 +386,23 @@ class ConversationAction(Base):
         nullable=True,
     )
 
-    # -----------------------------------------------------
-    # Flexible action details
-    # -----------------------------------------------------
-
-    details: Mapped[dict | None] = mapped_column(
-        JSON,
-        nullable=True,
-    )
-
-    # -----------------------------------------------------
-    # Timestamps
-    # -----------------------------------------------------
-
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime,
-        nullable=False,
-        default=datetime.utcnow,
-        index=True,
-    )
-
     completed_at: Mapped[datetime | None] = mapped_column(
-        DateTime,
+        DateTime(timezone=True),
         nullable=True,
     )
 
-    # -----------------------------------------------------
-    # Relationships
-    # -----------------------------------------------------
-
-    conversation: Mapped["Conversation"] = relationship(
+    conversation = relationship(
+        "Conversation",
         back_populates="actions",
     )
 
 
-# =========================================================
-# Conversation Workflows
-# =========================================================
+# ============================================================
+# COMPANY
+# ============================================================
 
-class ConversationWorkflow(Base):
-    """
-    Persistent multi-step workflow state.
-
-    This is NOT conversational memory.
-
-    It stores business/process state that must survive
-    application restarts.
-
-    Examples:
-
-        invoice processing
-        ticket handling
-        booking workflow
-        customer lookup
-        order processing
-        multi-step Gmail operation
-    """
-
-    __tablename__ = "conversation_workflows"
-
-    __table_args__ = (
-        Index(
-            "ix_workflow_conversation_status",
-            "conversation_id",
-            "status",
-        ),
-    )
+class Company(Base):
+    __tablename__ = "companies"
 
     id: Mapped[int] = mapped_column(
         Integer,
@@ -520,66 +410,443 @@ class ConversationWorkflow(Base):
         autoincrement=True,
     )
 
-    conversation_id: Mapped[int] = mapped_column(
-        ForeignKey(
-            "conversations.id",
-            ondelete="CASCADE",
-        ),
+    company_code: Mapped[str] = mapped_column(
+        String(100),
+        unique=True,
         nullable=False,
         index=True,
     )
 
-    # -----------------------------------------------------
-    # Workflow information
-    # -----------------------------------------------------
+    company_name: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+    )
 
-    workflow_type: Mapped[str] = mapped_column(
+    domain: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+        index=True,
+    )
+
+    active: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=True,
+    )
+
+    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON,
+        nullable=True,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    customers = relationship(
+        "Customer",
+        back_populates="company",
+        cascade="all, delete-orphan",
+    )
+
+    orders = relationship(
+        "Order",
+        back_populates="company",
+        cascade="all, delete-orphan",
+    )
+
+
+# ============================================================
+# CUSTOMER
+# ============================================================
+
+class Customer(Base):
+    __tablename__ = "customers"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        autoincrement=True,
+    )
+
+    company_id: Mapped[int] = mapped_column(
+        ForeignKey("companies.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    customer_id: Mapped[str] = mapped_column(
         String(100),
         nullable=False,
+        index=True,
+    )
+
+    name: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+    )
+
+    email: Mapped[str | None] = mapped_column(
+        String(320),
+        nullable=True,
+        index=True,
+    )
+
+    phone: Mapped[str | None] = mapped_column(
+        String(50),
+        nullable=True,
+    )
+
+    address: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
     )
 
     status: Mapped[str] = mapped_column(
         String(50),
         nullable=False,
-        default="WAITING_FOR_INPUT",
-        index=True,
+        default="active",
     )
 
-    required_field: Mapped[str | None] = mapped_column(
-        String(100),
-        nullable=True,
-    )
-
-    # -----------------------------------------------------
-    # Dynamic workflow information
-    # -----------------------------------------------------
-
-    collected_data: Mapped[dict | None] = mapped_column(
+    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(
         JSON,
         nullable=True,
     )
 
-    # -----------------------------------------------------
-    # Timestamps
-    # -----------------------------------------------------
-
     created_at: Mapped[datetime] = mapped_column(
-        DateTime,
+        DateTime(timezone=True),
         nullable=False,
-        default=datetime.utcnow,
+        server_default=func.now(),
     )
 
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime,
+        DateTime(timezone=True),
         nullable=False,
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow,
+        server_default=func.now(),
+        onupdate=func.now(),
     )
 
-    # -----------------------------------------------------
-    # Relationships
-    # -----------------------------------------------------
+    company = relationship(
+        "Company",
+        back_populates="customers",
+    )
 
-    conversation: Mapped["Conversation"] = relationship(
-        back_populates="workflows",
+    orders = relationship(
+        "Order",
+        back_populates="customer",
+    )
+
+    __table_args__ = (
+        Index(
+            "ix_customer_company_customer",
+            "company_id",
+            "customer_id",
+            unique=True,
+        ),
+    )
+
+
+# ============================================================
+# ORDER
+# ============================================================
+
+class Order(Base):
+    __tablename__ = "orders"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        autoincrement=True,
+    )
+
+    company_id: Mapped[int] = mapped_column(
+        ForeignKey("companies.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    customer_id: Mapped[int] = mapped_column(
+        ForeignKey("customers.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+
+    order_id: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False,
+        index=True,
+    )
+
+    external_reference: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+        index=True,
+    )
+
+    status: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+        index=True,
+    )
+
+    payment_status: Mapped[str | None] = mapped_column(
+        String(50),
+        nullable=True,
+    )
+
+    fulfillment_status: Mapped[str | None] = mapped_column(
+        String(50),
+        nullable=True,
+    )
+
+    currency: Mapped[str] = mapped_column(
+        String(10),
+        nullable=False,
+        server_default="INR",
+    )
+
+    total_amount: Mapped[Decimal] = mapped_column(
+        Numeric(12, 2),
+        nullable=False,
+    )
+
+    shipping_address: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    tracking_number: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+        index=True,
+    )
+
+    estimated_delivery: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    delivered_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    # --------------------------------------------------------
+    # Refund / return / cancellation eligibility
+    # --------------------------------------------------------
+
+    cancellation_eligible: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        server_default="false",
+    )
+
+    refund_eligible: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        server_default="false",
+    )
+
+    return_eligible: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        server_default="false",
+    )
+
+    # --------------------------------------------------------
+    # Audit / system fields
+    # --------------------------------------------------------
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    created_by: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+    )
+
+    updated_by: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+    )
+
+    is_active: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        server_default="true",
+    )
+
+    source_system: Mapped[str | None] = mapped_column(
+        String(100),
+        nullable=True,
+    )
+
+    last_verified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON,
+        nullable=True,
+    )
+
+    company = relationship(
+        "Company",
+        back_populates="orders",
+    )
+
+    customer = relationship(
+        "Customer",
+        back_populates="orders",
+    )
+
+    items = relationship(
+        "OrderItem",
+        back_populates="order",
+        cascade="all, delete-orphan",
+    )
+
+    events = relationship(
+        "OrderEvent",
+        back_populates="order",
+        cascade="all, delete-orphan",
+    )
+
+    __table_args__ = (
+        Index(
+            "ix_order_company_order_id",
+            "company_id",
+            "order_id",
+            unique=True,
+        ),
+    )
+
+
+# ============================================================
+# ORDER ITEM
+# ============================================================
+
+class OrderItem(Base):
+    __tablename__ = "order_items"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        autoincrement=True,
+    )
+
+    order_id: Mapped[int] = mapped_column(
+        ForeignKey("orders.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    product_id: Mapped[str | None] = mapped_column(
+        String(100),
+        nullable=True,
+    )
+
+    product_name: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+    )
+
+    quantity: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=1,
+    )
+
+    unit_price: Mapped[Decimal] = mapped_column(
+        Numeric(12, 2),
+        nullable=False,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    order = relationship(
+        "Order",
+        back_populates="items",
+    )
+
+
+# ============================================================
+# ORDER EVENT
+# ============================================================
+
+class OrderEvent(Base):
+    __tablename__ = "order_events"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        autoincrement=True,
+    )
+
+    order_id: Mapped[int] = mapped_column(
+        ForeignKey("orders.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    event_type: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False,
+    )
+
+    description: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    event_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+
+    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON,
+        nullable=True,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    order = relationship(
+        "Order",
+        back_populates="events",
     )

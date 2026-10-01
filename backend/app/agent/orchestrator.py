@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from datetime import datetime, timedelta
 from typing import Any
-
+from app.agent.business_agent import business_agent
 from app.agent.bedrock import bedrock_service
 from app.agent.executor import gmail_executor
 from app.agent.intent import (
@@ -22,6 +23,10 @@ from app.agent.state import (
 from app.database.connection import SessionLocal
 from app.services.database_service import DatabaseService
 from app.services.conversation_service import ConversationService
+from app.knowledge.service import knowledge_base_service
+
+
+logger = logging.getLogger(__name__)
 
 
 class GmailOrchestrator:
@@ -39,34 +44,40 @@ class GmailOrchestrator:
         Amazon Bedrock
              |
              v
-        Structured Gmail Intent
+        Structured Intent
              |
-             v
-        Dynamic Context Resolution
-             |
-             v
-        Dynamic SEND Completion
-             |
-             v
-        Gmail Executor
-             |
-             v
-        Gmail API
-             |
-             v
-        Actual Gmail Result
-             |
-             v
-        Amazon Bedrock
-             |
-             v
-        Natural-language response
-             |
-             v
-        Persistent Conversation
-             |
-             v
-        PostgreSQL
+             +-----------------------------+
+             |                             |
+             v                             v
+        Gmail Intent                  Knowledge Base
+             |                             |
+             v                             v
+        Gmail Context                KB Retrieval
+             |                             |
+             v                             v
+        Gmail Executor               Amazon Bedrock
+             |                             |
+             v                             v
+        Gmail API                    Retrieved Chunks
+
+             Business Query
+                   |
+                   v
+             BusinessAgent
+                   |
+                   v
+            Business Database
+                   |
+                   +-------------+
+                           |
+                           v
+                  Natural-language response
+                           |
+                           v
+                  Persistent Conversation
+                           |
+                           v
+                       PostgreSQL
 
     Design principles:
 
@@ -83,9 +94,13 @@ class GmailOrchestrator:
         11. Relative dates are resolved dynamically in Python.
         12. SEND completion is generated dynamically.
         13. Destructive operations require confirmation.
-        14. Final responses are generated from actual Gmail results.
-        15. No user-specific Gmail data is hard-coded.
-        16. Natural conversational references are resolved dynamically.
+        14. Final Gmail responses are generated from actual Gmail results.
+        15. Knowledge Base answers are grounded only in retrieved KB content.
+        16. Knowledge Base retrieval never executes Gmail operations.
+        17. Business queries use BusinessAgent and the structured business database.
+        18. Business identifiers and company resolution are handled dynamically.
+        19. No user-specific Gmail or business data is hard-coded.
+        20. Natural conversational references are resolved dynamically.
     """
 
     def __init__(
@@ -100,6 +115,7 @@ class GmailOrchestrator:
         )
 
         self.executor = gmail_executor
+        self.knowledge_base = knowledge_base_service
 
     # =========================================================
     # PUBLIC PROCESS
@@ -123,7 +139,6 @@ class GmailOrchestrator:
         # -----------------------------------------------------
 
         if account_email:
-
             self.state.set_account(
                 account_email
             )
@@ -134,7 +149,6 @@ class GmailOrchestrator:
         )
 
         if not account:
-
             raise ValueError(
                 "Authenticated Gmail account is required."
             )
@@ -171,20 +185,7 @@ class GmailOrchestrator:
             )
 
             # -------------------------------------------------
-            # IMPORTANT:
-            #
-            # Restore pending destructive action from
-            # PostgreSQL into live ConversationState.
-            #
-            # This allows:
-            #
-            # Process 1:
-            #   Delete the first email
-            #
-            # Process 2:
-            #   yes
-            #
-            # to work correctly.
+            # Restore pending destructive action.
             # -------------------------------------------------
 
             self._restore_pending_action(
@@ -217,7 +218,6 @@ class GmailOrchestrator:
                 )
 
                 if not intent_value:
-
                     intent_value = (
                         GmailIntent.UNKNOWN.value
                     )
@@ -227,7 +227,6 @@ class GmailOrchestrator:
                 )
 
                 if user_message is None:
-
                     user_message = ""
 
                 # ---------------------------------------------
@@ -245,15 +244,11 @@ class GmailOrchestrator:
                 # Determine action status.
                 # ---------------------------------------------
 
-                if response.get(
-                    "cancelled"
-                ):
+                if response.get("cancelled"):
 
                     action_status = "cancelled"
 
-                elif response.get(
-                    "success"
-                ) is False:
+                elif response.get("success") is False:
 
                     action_status = "failed"
 
@@ -270,9 +265,7 @@ class GmailOrchestrator:
                     )
                 ):
 
-                    action_status = (
-                        "pending_confirmation"
-                    )
+                    action_status = "pending_confirmation"
 
                 else:
 
@@ -332,6 +325,7 @@ class GmailOrchestrator:
                     return finalize_response(
                         confirmation_result
                     )
+
             # =================================================
             # ACTIVE PERSISTENT WORKFLOW
             # =================================================
@@ -349,10 +343,6 @@ class GmailOrchestrator:
                     workflow_response
                 )
 
-            
-
-                
-
             # =================================================
             # STORE CURRENT USER REQUEST
             # =================================================
@@ -369,20 +359,34 @@ class GmailOrchestrator:
                     text
                 )
 
+                print("\nDEBUG AFTER BEDROCK")
+                print(
+                    "INTENT DATA:",
+                    intent_data,
+                )
+
                 intent_request = (
                     parse_bedrock_intent(
                         intent_data,
                         raw_text=text,
                     )
                 )
-                print("\nDEBUG AFTER PARSE")
-                print("INTENT DATA:", intent_data)
-                print("PARSED REQUEST:", intent_request)
-                print("PARSED REFERENCE:", intent_request.message_reference)
+
+                print(
+                    "PARSED REQUEST:",
+                    intent_request,
+                )
+
+                print(
+                    "PARSED REFERENCE:",
+                    intent_request.message_reference,
+                )
+
                 print(
                     "PARSED REFERENCE TYPE:",
                     intent_request.message_reference.type,
                 )
+
                 print(
                     "PARSED REFERENCE POSITION:",
                     intent_request.message_reference.position,
@@ -411,6 +415,39 @@ class GmailOrchestrator:
                         ),
                         "state": self.state.to_dict(),
                     }
+                )
+
+            # =================================================
+            # BUSINESS QUERY
+            # =================================================
+
+            if (
+                intent_request.intent
+                == GmailIntent.BUSINESS_QUERY
+            ):
+
+                return finalize_response(
+                    self._handle_business_query(
+                        user_text=text,
+                        request=intent_request,
+                        account_email=account,
+                    )
+                )
+
+            # =================================================
+            # KNOWLEDGE BASE
+            # =================================================
+
+            if (
+                intent_request.intent
+                == GmailIntent.KNOWLEDGE_BASE
+            ):
+
+                return finalize_response(
+                    self._handle_knowledge_base(
+                        user_text=text,
+                        request=intent_request,
+                    )
                 )
 
             # =================================================
@@ -595,6 +632,557 @@ class GmailOrchestrator:
             db.close()
 
     # =========================================================
+    # BUSINESS QUERY HANDLER
+    # =========================================================
+
+    def _handle_business_query(
+        self,
+        user_text: str,
+        request: GmailIntentRequest,
+        account_email: str,
+    ) -> dict[str, Any]:
+        """
+        Handle a structured business/customer-data question.
+
+        BusinessAgent is responsible for:
+            - extracting business identifiers
+            - resolving the company dynamically
+            - looking up the authoritative business database
+            - generating a grounded response
+
+        This method does not query Gmail and does not contain
+        hard-coded business identifiers.
+        """
+
+        query = (
+            request.query
+            or user_text
+            or ""
+        ).strip()
+
+        logger.info(
+            "============================================================"
+        )
+
+        logger.info(
+            "BUSINESS QUERY REQUEST"
+        )
+
+        logger.info(
+            "USER TEXT: %s",
+            user_text,
+        )
+
+        logger.info(
+            "BUSINESS QUERY: %s",
+            query,
+        )
+
+        logger.info(
+            "AUTHENTICATED ACCOUNT: %s",
+            account_email,
+        )
+
+        logger.info(
+            "============================================================"
+        )
+
+        if not query:
+
+            logger.warning(
+                "Business query is empty."
+            )
+
+            return {
+                "success": False,
+                "intent": (
+                    GmailIntent.BUSINESS_QUERY.value
+                ),
+                "confidence": request.confidence,
+                "error": (
+                    "Business query is empty."
+                ),
+                "user_message": (
+                    "Please provide the business information "
+                    "you need."
+                ),
+                "state": self.state.to_dict(),
+            }
+
+        try:
+
+            # The authenticated Gmail account is supplied as sender
+            # context only. BusinessAgent must not assume that it
+            # represents a business customer. Explicit business
+            # identifiers are resolved dynamically by BusinessAgent.
+            result = business_agent.process_email(
+                email={
+                    "subject": "",
+                    "from": account_email,
+                    "body": query,
+                }
+            )
+
+            if not isinstance(
+                result,
+                dict,
+            ):
+
+                logger.error(
+                    "BusinessAgent returned an invalid response."
+                )
+
+                return {
+                    "success": False,
+                    "intent": (
+                        GmailIntent.BUSINESS_QUERY.value
+                    ),
+                    "error": (
+                        "BusinessAgent returned an invalid response."
+                    ),
+                    "user_message": (
+                        "I couldn't retrieve the requested "
+                        "business information."
+                    ),
+                    "state": self.state.to_dict(),
+                }
+
+            response = dict(
+                result
+            )
+
+            response["success"] = result.get(
+                "success",
+                True,
+            )
+
+            response["intent"] = (
+                GmailIntent.BUSINESS_QUERY.value
+            )
+
+            response["confidence"] = (
+                request.confidence
+            )
+
+            response["user_message"] = (
+                result.get("reply")
+                or result.get("user_message")
+                or (
+                    "I couldn't retrieve the requested "
+                    "business information."
+                )
+            )
+
+            response["state"] = (
+                self.state.to_dict()
+            )
+
+            return response
+
+        except ValueError as exc:
+
+            logger.warning(
+                "Business query validation error: %s",
+                exc,
+            )
+
+            return {
+                "success": False,
+                "intent": (
+                    GmailIntent.BUSINESS_QUERY.value
+                ),
+                "confidence": request.confidence,
+                "error": str(exc),
+                "user_message": (
+                    "I couldn't process that business query."
+                ),
+                "state": self.state.to_dict(),
+            }
+
+        except Exception as exc:
+
+            logger.exception(
+                "Business query processing failed."
+            )
+
+            return {
+                "success": False,
+                "intent": (
+                    GmailIntent.BUSINESS_QUERY.value
+                ),
+                "confidence": request.confidence,
+                "error": str(exc),
+                "user_message": (
+                    "I couldn't retrieve the requested "
+                    "business information right now."
+                ),
+                "state": self.state.to_dict(),
+            }
+
+    # =========================================================
+    # KNOWLEDGE BASE HANDLER
+    # =========================================================
+
+    def _handle_knowledge_base(
+        self,
+        user_text: str,
+        request: GmailIntentRequest,
+    ) -> dict[str, Any]:
+        """
+        Execute a Knowledge Base question.
+
+        Flow:
+
+            User question
+                 ↓
+            KB query
+                 ↓
+            Amazon Bedrock Knowledge Base
+                 ↓
+            Retrieved chunks
+                 ↓
+            Grounded Bedrock response
+                 ↓
+            User
+
+        This method NEVER calls GmailExecutor.
+        """
+
+        # -----------------------------------------------------
+        # Resolve actual KB query.
+        # -----------------------------------------------------
+
+        query = (
+            request.query
+            or user_text
+            or ""
+        ).strip()
+
+        logger.info(
+            "============================================================"
+        )
+
+        logger.info(
+            "KNOWLEDGE BASE REQUEST"
+        )
+
+        logger.info(
+            "USER TEXT: %s",
+            user_text,
+        )
+
+        logger.info(
+            "KB QUERY: %s",
+            query,
+        )
+
+        logger.info(
+            "============================================================"
+        )
+
+        if not query:
+
+            logger.warning(
+                "Knowledge Base query is empty."
+            )
+
+            return {
+                "success": False,
+                "intent": (
+                    GmailIntent.KNOWLEDGE_BASE.value
+                ),
+                "confidence": request.confidence,
+                "error": (
+                    "Knowledge Base query is empty."
+                ),
+                "user_message": (
+                    "Please provide a question for the Knowledge Base."
+                ),
+                "state": self.state.to_dict(),
+            }
+
+        try:
+
+            # =================================================
+            # STEP 1
+            # RETRIEVE ACTUAL KB CONTENT
+            # =================================================
+
+            logger.info(
+                "Starting Knowledge Base retrieval..."
+            )
+
+            knowledge_result = (
+                self.knowledge_base.retrieve(
+                    query=query
+                )
+            )
+
+            # =================================================
+            # DETERMINE RESULT COUNT
+            # =================================================
+
+            result_count = 0
+
+            if isinstance(
+                knowledge_result,
+                dict,
+            ):
+
+                result_count = (
+                    knowledge_result.get(
+                        "result_count",
+                        0,
+                    )
+                    or 0
+                )
+
+            retrieved_results = []
+
+            if isinstance(
+                knowledge_result,
+                dict,
+            ):
+
+                retrieved_results = (
+                    knowledge_result.get(
+                        "results",
+                        [],
+                    )
+                    or []
+                )
+
+            # -------------------------------------------------
+            # If result_count isn't explicitly supplied by the
+            # service, calculate it from the actual results.
+            # -------------------------------------------------
+
+            if (
+                not result_count
+                and isinstance(
+                    retrieved_results,
+                    list,
+                )
+            ):
+
+                result_count = len(
+                    retrieved_results
+                )
+
+            logger.info(
+                "Knowledge Base retrieval returned %s results.",
+                result_count,
+            )
+
+            # =================================================
+            # LOG RETRIEVED CHUNK METADATA
+            # =================================================
+
+            for index, item in enumerate(
+                retrieved_results,
+                start=1,
+            ):
+
+                if not isinstance(
+                    item,
+                    dict,
+                ):
+                    continue
+
+                logger.info(
+                    "KB CHUNK %d | score=%s | source=%s",
+                    index,
+                    item.get("score"),
+                    item.get("source"),
+                )
+
+            # =================================================
+            # NO RESULTS
+            # =================================================
+
+            if result_count == 0:
+
+                logger.warning(
+                    "Knowledge Base returned zero results "
+                    "for query: %s",
+                    query,
+                )
+
+                user_message = (
+                    "I couldn't find relevant information "
+                    "in the Knowledge Base for that question."
+                )
+
+                self.state.record_action(
+                    action="knowledge_base",
+                    details={
+                        "user_text": user_text,
+                        "query": query,
+                        "result_count": 0,
+                    },
+                )
+
+                return {
+                    "success": True,
+                    "intent": (
+                        GmailIntent.KNOWLEDGE_BASE.value
+                    ),
+                    "confidence": request.confidence,
+                    "result": knowledge_result,
+                    "user_message": user_message,
+                    "state": self.state.to_dict(),
+                }
+
+            # =================================================
+            # STEP 2
+            # GENERATE GROUNDED ANSWER
+            # =================================================
+
+            logger.info(
+                "Generating grounded Knowledge Base response..."
+            )
+
+            user_message = (
+                self._generate_knowledge_response(
+                    user_text=user_text,
+                    request=request,
+                    result=knowledge_result,
+                )
+            )
+
+            user_message = (
+                str(
+                    user_message
+                ).strip()
+                if user_message
+                else ""
+            )
+
+            if not user_message:
+
+                logger.warning(
+                    "Knowledge Base answer generation "
+                    "returned empty text."
+                )
+
+                user_message = (
+                    "I found relevant information, "
+                    "but I couldn't generate a response."
+                )
+
+            # =================================================
+            # STEP 3
+            # RECORD LIVE STATE
+            # =================================================
+
+            self.state.record_action(
+                action="knowledge_base",
+                details={
+                    "user_text": user_text,
+                    "query": query,
+                    "result_count": result_count,
+                },
+            )
+
+            # =================================================
+            # FINAL RESPONSE
+            # =================================================
+
+            response = {
+                "success": True,
+                "intent": (
+                    GmailIntent.KNOWLEDGE_BASE.value
+                ),
+                "confidence": request.confidence,
+                "result": knowledge_result,
+                "user_message": user_message,
+                "state": self.state.to_dict(),
+            }
+
+            logger.info(
+                "============================================================"
+            )
+
+            logger.info(
+                "KNOWLEDGE BASE REQUEST COMPLETED"
+            )
+
+            logger.info(
+                "SUCCESS: True"
+            )
+
+            logger.info(
+                "RESULT COUNT: %s",
+                result_count,
+            )
+
+            logger.info(
+                "============================================================"
+            )
+
+            return response
+
+        except ValueError as exc:
+
+            logger.warning(
+                "Knowledge Base validation error: %s",
+                exc,
+            )
+
+            return {
+                "success": False,
+                "intent": (
+                    GmailIntent.KNOWLEDGE_BASE.value
+                ),
+                "confidence": request.confidence,
+                "error": str(exc),
+                "user_message": (
+                    "I couldn't process that Knowledge Base question."
+                ),
+                "state": self.state.to_dict(),
+            }
+
+        except RuntimeError as exc:
+
+            logger.exception(
+                "Knowledge Base runtime error."
+            )
+
+            return {
+                "success": False,
+                "intent": (
+                    GmailIntent.KNOWLEDGE_BASE.value
+                ),
+                "confidence": request.confidence,
+                "error": str(exc),
+                "user_message": (
+                    "I couldn't retrieve the information "
+                    "from the Knowledge Base."
+                ),
+                "state": self.state.to_dict(),
+            }
+
+        except Exception as exc:
+
+            logger.exception(
+                "Unexpected Knowledge Base error."
+            )
+
+            return {
+                "success": False,
+                "intent": (
+                    GmailIntent.KNOWLEDGE_BASE.value
+                ),
+                "confidence": request.confidence,
+                "error": str(exc),
+                "user_message": (
+                    "Something went wrong while accessing "
+                    "the Knowledge Base."
+                ),
+                "state": self.state.to_dict(),
+            }
+
+    # =========================================================
     # RESTORE PENDING ACTION
     # =========================================================
 
@@ -604,13 +1192,6 @@ class GmailOrchestrator:
         conversation,
         account_email: str,
     ) -> None:
-        """
-        Restore pending confirmation from PostgreSQL
-        into the current in-memory ConversationState.
-
-        This is required because each Python process has
-        its own ConversationState instance.
-        """
 
         try:
 
@@ -622,12 +1203,11 @@ class GmailOrchestrator:
             )
 
         except Exception:
-            db.rollback()
 
+            db.rollback()
             pending = None
 
         if not pending:
-
             return
 
         pending_account = (
@@ -635,11 +1215,6 @@ class GmailOrchestrator:
                 "account_email"
             )
         )
-
-        # -----------------------------------------------------
-        # Never restore a pending action belonging to a
-        # different authenticated account.
-        # -----------------------------------------------------
 
         if (
             pending_account
@@ -653,12 +1228,7 @@ class GmailOrchestrator:
 
             return
 
-        # -----------------------------------------------------
-        # Do not overwrite an already existing live action.
-        # -----------------------------------------------------
-
         if self.state.has_pending_action():
-
             return
 
         self.state.pending_action = dict(
@@ -678,22 +1248,26 @@ class GmailOrchestrator:
         selected = (
             self.state.get_selected_result()
         )
+
         print("\nDEBUG CONTEXT")
-        print("INTENT:", request.intent)
+        print(
+            "INTENT:",
+            request.intent,
+        )
 
         print(
             "REFERENCE BEFORE:",
-            request.message_reference
+            request.message_reference,
         )
 
         print(
             "IS PRESENT:",
-            request.message_reference.is_present()
+            request.message_reference.is_present(),
         )
 
         print(
             "SELECTED:",
-            selected
+            selected,
         )
 
         # -----------------------------------------------------
@@ -758,7 +1332,6 @@ class GmailOrchestrator:
     ) -> bool:
 
         if selected is None:
-
             return False
 
         normalized = (
@@ -771,13 +1344,11 @@ class GmailOrchestrator:
         if self._contains_new_email_command(
             normalized
         ):
-
             return False
 
         if not self._contains_context_reference(
             normalized
         ):
-
             return False
 
         body = self._clean_text(
@@ -810,7 +1381,7 @@ class GmailOrchestrator:
 
             body = self._extract_followup_body(
                 request=request,
-                user_text=request.raw_text,
+                user_text=request.raw_text or "",
             )
 
         if not body:
@@ -860,7 +1431,6 @@ class GmailOrchestrator:
     ) -> GmailIntentRequest:
 
         if request.message_reference.is_present():
-
             return request
 
         selected = (
@@ -868,7 +1438,6 @@ class GmailOrchestrator:
         )
 
         if selected is None:
-
             return request
 
         return GmailIntentRequest(
@@ -933,7 +1502,6 @@ class GmailOrchestrator:
     ) -> str:
 
         if value is None:
-
             return ""
 
         return str(value).strip()
@@ -947,7 +1515,6 @@ class GmailOrchestrator:
             request.metadata,
             dict,
         ):
-
             return dict(
                 request.metadata
             )
@@ -1041,7 +1608,6 @@ class GmailOrchestrator:
         )
 
         if body:
-
             return body
 
         text = self._clean_text(
@@ -1070,7 +1636,6 @@ class GmailOrchestrator:
                 )
 
                 if extracted:
-
                     return extracted
 
         return ""
@@ -1104,19 +1669,16 @@ class GmailOrchestrator:
             )
 
         if subject and body:
-
             return request
 
         missing_fields = []
 
         if not subject:
-
             missing_fields.append(
                 "subject"
             )
 
         if not body:
-
             missing_fields.append(
                 "body"
             )
@@ -1304,7 +1866,6 @@ User request:
         ) -> str | None:
 
             if not value:
-
                 return None
 
             cleaned = str(
@@ -1312,7 +1873,6 @@ User request:
             ).strip()
 
             if not cleaned:
-
                 return None
 
             cleaned = re.sub(
@@ -1707,10 +2267,6 @@ User request:
                     "state": self.state.to_dict(),
                 }
 
-            # -------------------------------------------------
-            # PostgreSQL pending action is now resolved.
-            # -------------------------------------------------
-
             if (
                 db is not None
                 and conversation is not None
@@ -1947,7 +2503,8 @@ User request:
             conversation_context = {}
 
         system_prompt = """
-You are the intent planner for a production Gmail AI agent.
+You are the intent planner for a production Gmail AI agent
+with an integrated Knowledge Base.
 
 Understand the user's request and return ONLY valid JSON.
 
@@ -1964,8 +2521,14 @@ You must NOT:
 - invent senders
 - invent subjects
 - invent email content
+- answer Knowledge Base questions yourself
+- answer Business Query questions yourself
+- invent business records
+- invent order IDs, customer IDs, tracking numbers, or transaction IDs
+- invent business status, payment, delivery, return, or refund information
 
-The application will perform all actual Gmail operations.
+The application performs all actual Gmail operations,
+Knowledge Base retrieval, and business database resolution.
 
 Supported intents:
 
@@ -1973,6 +2536,8 @@ search
 read
 send
 reply
+knowledge_base
+business_query
 star
 unstar
 delete
@@ -1989,7 +2554,9 @@ previous
 latest
 none
 
-REFERENCE RULES:
+=============================================================
+REFERENCE RULES
+=============================================================
 
 - "first email" means position 1.
 - "second email" means position 2.
@@ -2014,69 +2581,646 @@ REFERENCE RULES:
 - "same message" means current.
 - "same thread" refers to the current conversation/thread.
 
-IMPORTANT:
-
 Never create an ID from these references.
 
 The application resolves references to actual Gmail data.
 
-For SEND:
+=============================================================
+BUSINESS QUERY RULES
+=============================================================
 
-- SEND means a NEW email.
-- Extract recipient only when explicitly supplied.
-- Extract subject only when explicitly supplied.
-- Extract body only when explicitly supplied.
-- Missing subject must be null.
-- Missing body must be null.
-- Never invent missing values.
+The application has a structured business database and a
+BusinessAgent for resolving real business/customer records.
 
-For REPLY:
+Use:
 
-- Extract the actual reply body supplied by the user.
-- Resolve the reference semantically.
-- Do not create Gmail IDs.
+    "intent": "business_query"
 
-For SEARCH:
+when the user asks about a SPECIFIC business record,
+customer, order, shipment, payment, delivery, transaction,
+return, refund, invoice, or other operational business data.
 
-- Generate a Gmail-compatible query from the user's actual
-  request.
-- Preserve explicit filters.
-- Do not invent people.
-- Do not invent email addresses.
-- Do not invent subjects.
-- Do not invent labels or categories.
-- Do not regroup search results into categories.
-- If the user says "related to X", search for the actual term X
-  unless the user explicitly supplied another Gmail filter.
-- If the user supplies a quoted phrase, preserve that phrase as the
-  search meaning.
-- Relative date expressions such as today, yesterday,
-  this week, last week and this month should remain semantic.
-- Python resolves relative calendar dates.
+Examples:
 
-SEARCH OUTPUT RULE:
-The query must represent the user's requested search, not a summary
-of what Gmail might contain. The application will execute the query
-and will display only the messages actually returned by Gmail.
+"What is the status of my order ORD-10001?"
+-> business_query
+
+"Where is my package TRK-10001?"
+-> business_query
+
+"Has my order been shipped?"
+-> business_query
+
+"Has my order been delivered?"
+-> business_query
+
+"What is the payment status of my order?"
+-> business_query
+
+"Can I return my order?"
+-> business_query
+
+"Is my order eligible for a refund?"
+-> business_query
+
+"Show me the details of customer CUS-10001."
+-> business_query
+
+IMPORTANT:
+
+A question about a SPECIFIC business record is a
+business_query even when it is phrased as a general
+information question.
+
+For example:
+
+"What is the status of my order ORD-10001?"
+
+MUST be:
+
+{
+    "intent": "business_query",
+    "query": "What is the status of my order ORD-10001?",
+    "confidence": 0.0-1.0
+}
+
+It MUST NOT be classified as:
+
+    knowledge_base
+
+The Knowledge Base contains company/document knowledge.
+It is NOT the source of truth for live structured business
+records.
+
+KNOWLEDGE_BASE examples:
+
+"What is our refund policy?"
+-> knowledge_base
+
+"What does the return policy document say?"
+-> knowledge_base
+
+"How many days do customers have to return an item?"
+-> knowledge_base
+
+BUSINESS_QUERY examples:
+
+"What is the status of order ORD-12345?"
+-> business_query
+
+"Where is tracking number TRK-98765?"
+-> business_query
+
+"What happened to customer CUS-54321's order?"
+-> business_query
+
+Dynamic identifiers may be order IDs, customer IDs,
+tracking numbers, invoice IDs, transaction IDs, or other
+values supplied by the user.
+
+Do NOT hardcode any identifier.
+
+Do NOT assume a particular identifier belongs to a particular
+company.
+
+Do NOT invent a company.
+
+Do NOT invent a customer.
+
+Do NOT invent an order.
+
+Do NOT invent a status.
+
+Do NOT invent a tracking number.
+
+Do NOT answer the business question yourself.
+
+BusinessAgent performs dynamic identifier extraction,
+company resolution, database lookup, and grounded response
+generation.
+
+For a Business Query:
+
+{
+    "intent": "business_query",
+    "query": "<actual business information question>",
+    "confidence": 0.0-1.0
+}
+
+The query must preserve the user's actual question.
+
+Do not rewrite it into an unrelated summary.
+
+=============================================================
+
+=============================================================
+KNOWLEDGE BASE RULES
+=============================================================
+
+The Knowledge Base is a separate information source from Gmail.
+
+Use:
+
+    "intent": "knowledge_base"
+
+when the user is asking a factual or informational question
+that should be answered using the configured company or
+application Knowledge Base.
+
+Examples include:
+
+- company policies
+- HR policies
+- leave policy
+- reimbursement policy
+- onboarding information
+- employee procedures
+- internal documentation
+- product documentation
+- company process
+- information contained in uploaded/company documents
+- "according to the company documents..."
+- "what does the documentation say..."
+- "what is the process for..."
+- "what is the policy for..."
+
+IMPORTANT:
+
+If the user is asking for information from the Knowledge Base,
+do NOT use Gmail SEARCH.
+
+Do NOT invent the answer.
+
+Do NOT create sources.
+
+Do NOT create document names.
+
+Do NOT create URLs.
+
+Do NOT search Gmail for the answer.
+
+The application will retrieve the actual Knowledge Base
+source chunks and then generate the final answer.
+
+For a Knowledge Base request:
+
+{
+    "intent": "knowledge_base",
+    "query": "<actual information question>",
+    "confidence": 0.0-1.0
+}
+
+The `query` must contain the actual question or information
+being requested by the user.
+
+Do not rewrite the question into an unrelated summary.
+
+=============================================================
+KNOWLEDGE BASE VS GMAIL
+=============================================================
+
+Use KNOWLEDGE_BASE when the user wants information from
+documents/company knowledge.
+
+Use SEARCH when the user wants to find actual Gmail messages.
+
+Examples:
+
+"What is the leave policy?"
+-> knowledge_base
+
+"What is the reimbursement process?"
+-> knowledge_base
+
+"What does our onboarding document say?"
+-> knowledge_base
+
+"Find emails about leave policy."
+-> search
+
+"Show me emails about reimbursement."
+-> search
+
+"Find the email about onboarding."
+-> search
+
+If the user explicitly asks to find, show, read, search,
+or retrieve emails, use Gmail intents.
+
+If the user asks what a policy/process/document says,
+use knowledge_base when appropriate.
+
+=============================================================
+SEND
+=============================================================
+
+SEND means a NEW email.
+
+Extract recipient only when explicitly supplied.
+Extract subject only when explicitly supplied.
+Extract body only when explicitly supplied.
+
+Missing subject must be null.
+Missing body must be null.
+
+Never invent missing values.
+
+=============================================================
+REPLY
+=============================================================
+
+Extract the actual reply body supplied by the user.
+
+Resolve the reference semantically.
+
+Do not create Gmail IDs.
+
+=============================================================
+SEARCH
+=============================================================
+
+Generate a Gmail-compatible query from the user's actual
+request.
+
+The query must represent the user's requested search
+semantically and must NOT add conditions that the user did not
+request.
+
+-------------------------------------------------------------
+SEARCH FILTER SEMANTICS
+-------------------------------------------------------------
+
+IMPORTANT:
+
+"received mails", "received emails", "incoming mails",
+"incoming emails", "mails I received", and similar phrases
+mean emails received by the user's Gmail account.
+
+They do NOT mean unread emails.
+
+Therefore:
+
+"Show me today's received mails"
+
+must NOT contain:
+
+    is:unread
+
+It should represent today's received mail date range.
+
+-------------------------------------------------------------
+UNREAD
+-------------------------------------------------------------
+
+Only add:
+
+    is:unread
+
+when the user explicitly asks for unread mail.
+
+Examples:
+
+"Show me unread emails"
+-> is:unread
+
+"Show me today's unread emails"
+-> is:unread plus today's date range
+
+"Find unread emails from Rahul"
+-> is:unread plus the requested sender condition
+
+Never add is:unread merely because an email is recent,
+received today, new, latest, or incoming.
+
+-------------------------------------------------------------
+READ
+-------------------------------------------------------------
+
+Only add:
+
+    is:read
+
+when the user explicitly asks for read emails.
+
+Do not add is:read when the user simply asks for received
+emails.
+
+-------------------------------------------------------------
+RECEIVED / INCOMING
+-------------------------------------------------------------
+
+"received", "incoming", "I received", or equivalent wording
+does not imply unread status.
+
+Examples:
+
+"Show me today's received mails"
+-> today's date range
+
+"Show me emails I received yesterday"
+-> yesterday's date range
+
+"Find emails received from Rahul"
+-> sender filter for Rahul
+
+"Show me the latest received email"
+-> latest/relevant Gmail search without automatically adding
+is:unread
+
+-------------------------------------------------------------
+SENT
+-------------------------------------------------------------
+
+Only use:
+
+    in:sent
+
+when the user explicitly asks for sent emails.
+
+Examples:
+
+"Show me today's sent emails"
+-> in:sent plus today's date range
+
+"Show emails I sent to Rahul"
+-> in:sent plus the requested recipient condition
+
+Do not use in:sent for ordinary received/incoming mail.
+
+-------------------------------------------------------------
+DATE FILTERS
+-------------------------------------------------------------
+
+Interpret relative dates semantically.
+
+Examples:
+
+"today"
+-> today's calendar date
+
+"today's emails"
+-> emails from today
+
+"today's received emails"
+-> received emails from today
+
+"today's unread emails"
+-> unread emails from today
+
+"yesterday's emails"
+-> emails from yesterday
+
+"this week"
+-> emails from the current week
+
+"last week"
+-> emails from the previous week
+
+"this month"
+-> emails from the current month
+
+Python/application logic may resolve relative dates into
+actual Gmail-compatible date filters.
+
+Do not add unrelated filters while resolving dates.
+
+-------------------------------------------------------------
+VERY IMPORTANT: DO NOT INFER FILTERS
+-------------------------------------------------------------
+
+Do NOT add:
+
+    is:unread
+    is:read
+    in:sent
+    from:
+    to:
+    subject:
+    label:
+    has:attachment
+
+unless the user's request actually supports that filter.
+
+For example:
+
+"Show me today's received mails"
+
+must NOT become:
+
+    is:unread after:YYYY/MM/DD before:YYYY/MM/DD
+
+because "received" does not mean "unread".
+
+It should contain only the date constraint required for
+today's received mail search.
+
+Likewise:
+
+"Show me today's mails"
+
+must not automatically become unread mail.
+
+-------------------------------------------------------------
+SENDER / RECIPIENT
+-------------------------------------------------------------
+
+If the user explicitly identifies a sender, use the sender
+information.
+
+If the user explicitly identifies a recipient, use the
+recipient information.
+
+Do not invent people or email addresses.
+
+Do not assume that a person's name corresponds to a particular
+email address unless the application already has that
+information available through conversation context or Gmail
+data.
+
+-------------------------------------------------------------
+SUBJECT / CONTENT
+-------------------------------------------------------------
+
+If the user asks for emails about a specific subject or topic,
+preserve the actual search meaning.
+
+Examples:
+
+"Find emails about invoices"
+-> search for invoices
+
+"Find emails with subject project update"
+-> subject-related search
+
+Do not invent a subject or rewrite the user's topic into an
+unrelated term.
+
+-------------------------------------------------------------
+RELATIVE / CONVERSATIONAL SEARCH
+-------------------------------------------------------------
+
+If the user says:
+
+"show me the latest mails"
+"show me today's mails"
+"show me received mails"
+"show me the mails I got today"
+"find the email I received yesterday"
+
+understand the semantic meaning of the request.
+
+Do not automatically interpret:
+
+"latest"
+"today"
+"received"
+"new"
+"incoming"
+
+as:
+
+    is:unread
+
+Unread status must come only from an explicit unread request.
+
+-------------------------------------------------------------
+EXAMPLES
+-------------------------------------------------------------
+
+User:
+"Show me today's received mails"
+
+Expected semantic meaning:
+Today's emails received by the user.
+
+Do NOT add:
+    is:unread
+
+User:
+"Show me today's unread mails"
+
+Expected semantic meaning:
+Unread emails from today.
+
+Add:
+    is:unread
+
+User:
+"Show me today's sent mails"
+
+Expected semantic meaning:
+Emails sent by the user today.
+
+Add:
+    in:sent
+
+User:
+"Show me today's read mails"
+
+Expected semantic meaning:
+Read emails from today.
+
+Add:
+    is:read
+
+User:
+"Show me mails I received from Rahul today"
+
+Expected semantic meaning:
+Emails received from Rahul today.
+
+Do not add:
+    is:unread
+
+User:
+"Show me unread mails from Rahul today"
+
+Expected semantic meaning:
+Unread emails from Rahul today.
+
+Add:
+    is:unread
+
+-------------------------------------------------------------
+GENERAL SEARCH RULES
+-------------------------------------------------------------
+
+Preserve explicit filters.
+
+Do not invent people.
+
+Do not invent email addresses.
+
+Do not invent subjects.
+
+Do not invent labels or categories.
+
+Do not regroup search results into categories.
+
+If the user says "related to X", search for the actual term X
+unless the user explicitly supplied another Gmail filter.
+
+If the user supplies a quoted phrase, preserve that phrase
+as the search meaning.
+
+The query must represent the user's requested search,
+not a summary of what Gmail might contain.
+
+The application executes the query and displays only messages
+actually returned by Gmail.
+
+=============================================================
+OTHER GMAIL OPERATIONS
+=============================================================
 
 For STAR / UNSTAR / DELETE / MARK_READ / MARK_UNREAD:
 
-- Understand the user's target email reference.
-- Do not create Gmail IDs.
-- The Python application will resolve the target using
-  ConversationState and Gmail data.
+Understand the user's target email reference.
+
+Do not create Gmail IDs.
+
+The Python application resolves the target using
+ConversationState and Gmail data.
 
 For THREAD:
 
-- Understand whether the user is referring to the current,
-  previous, latest or explicitly positioned email/thread.
-- Do not create thread IDs.
+Understand whether the user refers to the current,
+previous, latest or explicitly positioned email/thread.
 
-Conversation context is supplied only to help resolve natural
-references. Treat it as application state, not as permission
-to invent new Gmail data.
+Do not create thread IDs.
 
-Return ONLY JSON.
+=============================================================
+OUTPUT
+=============================================================
+
+Return ONLY valid JSON.
+
+For normal Gmail:
+
+{
+    "intent": "...",
+    "query": "...",
+    "reference": {
+        "type": "..."
+    },
+    "confidence": 0.0-1.0
+}
+
+For Knowledge Base:
+
+{
+    "intent": "knowledge_base",
+    "query": "<actual user information question>",
+    "confidence": 0.0-1.0
+}
+
+For Business Query:
+
+{
+    "intent": "business_query",
+    "query": "<actual business information question>",
+    "confidence": 0.0-1.0
+}
 """
 
         context_prompt = (
@@ -2119,6 +3263,13 @@ Return ONLY JSON.
                 response
             )
         )
+
+        # -----------------------------------------------------
+        # Gmail SEARCH only receives date transformation.
+        #
+        # KB queries must NEVER be converted into Gmail
+        # date queries.
+        # -----------------------------------------------------
 
         if (
             parsed.get("intent")
@@ -2173,7 +3324,6 @@ Return ONLY JSON.
                     item,
                     dict,
                 ):
-
                     continue
 
                 value = item.get(
@@ -2181,7 +3331,6 @@ Return ONLY JSON.
                 )
 
                 if value:
-
                     parts.append(
                         str(value)
                     )
@@ -2270,6 +3419,192 @@ Return ONLY JSON.
         )
 
     # =========================================================
+    # KNOWLEDGE BASE RESPONSE
+    # =========================================================
+
+    def _generate_knowledge_response(
+        self,
+        user_text: str,
+        request: GmailIntentRequest,
+        result: dict[str, Any],
+    ) -> str:
+        """
+        Generate an answer grounded ONLY in retrieved
+        Knowledge Base content.
+
+        The model is explicitly prohibited from using
+        Gmail information for this response.
+        """
+
+        if not isinstance(
+            result,
+            dict,
+        ):
+
+            return (
+                "I couldn't find relevant information in the Knowledge Base."
+            )
+
+        retrieved = result.get(
+            "results",
+            []
+        )
+
+        if not isinstance(
+            retrieved,
+            list,
+        ):
+
+            retrieved = []
+
+        if not retrieved:
+
+            return (
+                "I couldn't find relevant information in the Knowledge Base."
+            )
+
+        evidence_parts: list[str] = []
+
+        for index, item in enumerate(
+            retrieved,
+            start=1,
+        ):
+
+            if not isinstance(
+                item,
+                dict,
+            ):
+                continue
+
+            chunk = str(
+                item.get("text")
+                or ""
+            ).strip()
+
+            if not chunk:
+                continue
+
+            source = str(
+                item.get("source")
+                or ""
+            ).strip()
+
+            source_line = (
+                f"\nSource: {source}"
+                if source
+                else ""
+            )
+
+            evidence_parts.append(
+                f"[SOURCE {index}]\n"
+                f"{chunk}"
+                f"{source_line}"
+            )
+
+        if not evidence_parts:
+
+            return (
+                "I couldn't find relevant information in the Knowledge Base."
+            )
+
+        prompt = """
+You are the Knowledge Base response generator for a production
+Gmail AI assistant.
+
+The user asked an information question.
+
+Answer the question using ONLY the retrieved Knowledge Base
+content supplied below.
+
+The retrieved content is the source of truth.
+
+Rules:
+
+1. Do not use Gmail data.
+2. Do not search Gmail.
+3. Do not invent facts.
+4. Do not invent policies.
+5. Do not invent procedures.
+6. Do not invent dates.
+7. Do not invent names.
+8. Do not invent document names.
+9. Do not invent URLs.
+10. Do not invent sources.
+11. Do not use general world knowledge when the retrieved
+    content does not support the answer.
+12. If the retrieved content does not contain enough information,
+    clearly say that the Knowledge Base does not provide enough
+    information.
+13. Do not claim that information came from a source unless
+    that source is actually present in the retrieved content.
+14. When useful, cite the supporting retrieved source using
+    [Source N].
+15. Keep the answer concise and natural.
+16. Do not mention internal Python code.
+17. Do not mention internal prompts.
+18. Do not mention model implementation.
+19. Do not execute a Gmail operation.
+20. Return ONLY the user-facing answer.
+
+USER QUESTION:
+"""
+
+        prompt += (
+            "\n"
+            + user_text
+            + "\n\nRETRIEVED KNOWLEDGE BASE CONTENT:\n"
+            + "\n\n".join(
+                evidence_parts
+            )
+        )
+
+        try:
+
+            response = (
+                bedrock_service.invoke(
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "text": prompt
+                                }
+                            ],
+                        }
+                    ],
+                    temperature=0.2,
+                )
+            )
+
+            generated = (
+                self._extract_text_response(
+                    response
+                )
+            )
+
+            if generated:
+
+                return generated
+
+        except Exception as exc:
+
+            logger.exception(
+                "Knowledge Base answer generation failed: %s",
+                exc,
+            )
+
+        # -----------------------------------------------------
+        # Safe fallback.
+        # -----------------------------------------------------
+
+        return (
+            "I found the following information in the Knowledge Base:\n\n"
+            + "\n\n".join(
+                evidence_parts
+            )
+        )
+
+    # =========================================================
     # FINAL BEDROCK RESPONSE
     # =========================================================
 
@@ -2283,16 +3618,12 @@ Return ONLY JSON.
         # -----------------------------------------------------
         # COLLECTION RESULTS
         # -----------------------------------------------------
-        # Search/list operations are rendered deterministically.
-        # This prevents the final LLM from regrouping actual Gmail
-        # results into invented categories such as "Promotional",
-        # "Drafts", "Sent", etc. The result set returned by
-        # Gmail is authoritative.
-        # -----------------------------------------------------
+
         if request.intent in {
             GmailIntent.SEARCH,
             GmailIntent.LIST_UNREAD,
         }:
+
             return self._format_collection_response(
                 request=request,
                 result=result,
@@ -2307,14 +3638,12 @@ Return ONLY JSON.
         # -----------------------------------------------------
         # CONFIRMATION SAFETY GATE
         # -----------------------------------------------------
-        # A destructive action that requires confirmation has
-        # NOT been executed yet. Do not allow the LLM to describe
-        # it as completed. The application state is authoritative.
-        # -----------------------------------------------------
 
         if (
             isinstance(result, dict)
-            and result.get("confirmation_required")
+            and result.get(
+                "confirmation_required"
+            )
         ):
 
             return self._fallback_response(
@@ -2366,10 +3695,6 @@ Rules:
 27. If the operation failed, explain the actual failure.
 28. Respond directly to the user.
 29. Do not output JSON unless the user explicitly asks for JSON.
-
-The user's request was supplied separately.
-
-The actual Gmail result is supplied below.
 """
 
         payload = {
@@ -2413,12 +3738,14 @@ The actual Gmail result is supplied below.
             )
 
             if text:
-
                 return text
 
-        except Exception:
+        except Exception as exc:
 
-            pass
+            logger.exception(
+                "Final Gmail response generation failed: %s",
+                exc,
+            )
 
         return self._fallback_response(
             request=request,
@@ -2434,41 +3761,82 @@ The actual Gmail result is supplied below.
         request: GmailIntentRequest,
         result: Any,
     ) -> str:
-        """
-        Format Gmail collection results without asking the LLM
-        to reinterpret or regroup the returned messages.
 
-        This is intentionally deterministic. Gmail's returned
-        messages are the source of truth, so the assistant must
-        not invent categories or combine unrelated messages.
-        """
+        if not isinstance(
+            result,
+            dict,
+        ):
 
-        if not isinstance(result, dict):
-            return "I couldn't retrieve the email results."
+            return (
+                "I couldn't retrieve the email results."
+            )
 
-        if result.get("success") is False:
-            error = result.get("error")
-            return str(error) if error else "I couldn't retrieve the email results."
+        if result.get(
+            "success"
+        ) is False:
 
-        raw_messages = result.get("messages", [])
-        if not isinstance(raw_messages, list):
+            error = result.get(
+                "error"
+            )
+
+            return (
+                str(error)
+                if error
+                else
+                "I couldn't retrieve the email results."
+            )
+
+        raw_messages = result.get(
+            "messages",
+            []
+        )
+
+        if not isinstance(
+            raw_messages,
+            list,
+        ):
+
             raw_messages = []
 
         messages: list[dict[str, Any]] = []
 
-        for index, message in enumerate(raw_messages, start=1):
-            if not isinstance(message, dict):
+        for index, message in enumerate(
+            raw_messages,
+            start=1,
+        ):
+
+            if not isinstance(
+                message,
+                dict,
+            ):
                 continue
 
-            # Gmail service responses normally use these keys.
-            # The fallbacks make this formatter tolerant of older
-            # service response shapes without inventing data.
-            position = message.get("position", index)
-            sender = message.get("from") or message.get("sender")
-            recipient = message.get("to") or message.get("recipient")
-            subject = message.get("subject")
-            date = message.get("date")
-            snippet = message.get("snippet")
+            position = message.get(
+                "position",
+                index,
+            )
+
+            sender = (
+                message.get("from")
+                or message.get("sender")
+            )
+
+            recipient = (
+                message.get("to")
+                or message.get("recipient")
+            )
+
+            subject = message.get(
+                "subject"
+            )
+
+            date = message.get(
+                "date"
+            )
+
+            snippet = message.get(
+                "snippet"
+            )
 
             messages.append({
                 "position": position,
@@ -2481,47 +3849,92 @@ The actual Gmail result is supplied below.
 
         intent_label = (
             "unread emails"
-            if request.intent == GmailIntent.LIST_UNREAD
-            else "emails"
+            if request.intent
+            == GmailIntent.LIST_UNREAD
+            else
+            "emails"
         )
 
         if not messages:
-            query = result.get("query") or request.query
-            if query:
-                return f"I couldn't find any {intent_label} matching \"{query}\"."
-            return f"I couldn't find any {intent_label}."
 
-        query = result.get("query") or request.query
+            query = (
+                result.get("query")
+                or request.query
+            )
+
+            if query:
+
+                return (
+                    f'I couldn\'t find any '
+                    f'{intent_label} matching "{query}".'
+                )
+
+            return (
+                f"I couldn't find any "
+                f"{intent_label}."
+            )
+
+        query = (
+            result.get("query")
+            or request.query
+        )
+
         if query:
+
             response_lines = [
-                f"I found {len(messages)} {intent_label} matching \"{query}\":"
+                f'I found {len(messages)} '
+                f'{intent_label} matching "{query}":'
             ]
+
         else:
+
             response_lines = [
-                f"I found {len(messages)} {intent_label}:"
+                f"I found {len(messages)} "
+                f"{intent_label}:"
             ]
 
         for item in messages:
+
             position = item["position"]
+
             response_lines.append("")
-            response_lines.append(f"{position}.")
+            response_lines.append(
+                f"{position}."
+            )
 
             if item["sender"]:
-                response_lines.append(f"From: {item["sender"]}")
+
+                response_lines.append(
+                    f"From: {item['sender']}"
+                )
 
             if item["recipient"]:
-                response_lines.append(f"To: {item["recipient"]}")
+
+                response_lines.append(
+                    f"To: {item['recipient']}"
+                )
 
             if item["subject"]:
-                response_lines.append(f"Subject: {item["subject"]}")
+
+                response_lines.append(
+                    f"Subject: {item['subject']}"
+                )
 
             if item["date"]:
-                response_lines.append(f"Date: {item["date"]}")
+
+                response_lines.append(
+                    f"Date: {item['date']}"
+                )
 
             if item["snippet"]:
-                response_lines.append(f"Preview: {item["snippet"]}")
 
-        return "\n".join(response_lines)
+                response_lines.append(
+                    f"Preview: {item['snippet']}"
+                )
+
+        return "\n".join(
+            response_lines
+        )
 
     # =========================================================
     # PREPARE RESULT FOR LLM
@@ -2569,7 +3982,6 @@ The actual Gmail result is supplied below.
             text = response.strip()
 
             if text:
-
                 return text
 
         if isinstance(
@@ -2602,7 +4014,6 @@ The actual Gmail result is supplied below.
                         item,
                         dict,
                     ):
-
                         continue
 
                     value = item.get(
@@ -2610,7 +4021,6 @@ The actual Gmail result is supplied below.
                     )
 
                     if value:
-
                         parts.append(
                             str(value)
                         )
@@ -2634,7 +4044,6 @@ The actual Gmail result is supplied below.
                     item,
                     dict,
                 ):
-
                     continue
 
                 value = item.get(
@@ -2722,12 +4131,14 @@ User request:
             )
 
             if generated:
-
                 return generated
 
-        except Exception:
+        except Exception as exc:
 
-            pass
+            logger.exception(
+                "Error response generation failed: %s",
+                exc,
+            )
 
         return str(
             error
@@ -2777,7 +4188,6 @@ User request:
             )
 
             if error:
-
                 return str(
                     error
                 )
@@ -2812,7 +4222,7 @@ User request:
 You are a Gmail AI assistant.
 
 The user's request could not be mapped to a supported
-Gmail operation.
+Gmail operation or Knowledge Base question.
 
 Explain briefly that the request was not understood and
 ask the user to rephrase it.
@@ -2870,7 +4280,12 @@ User request:
                     "I couldn't understand the Gmail request."
                 )
 
-        except Exception:
+        except Exception as exc:
+
+            logger.exception(
+                "Unknown intent response generation failed: %s",
+                exc,
+            )
 
             user_message = (
                 "I couldn't understand the Gmail request."
@@ -2885,6 +4300,7 @@ User request:
             "user_message": user_message,
             "state": self.state.to_dict(),
         }
+
     # =========================================================
     # WORKFLOW PERSISTENCE
     # =========================================================
@@ -2894,17 +4310,16 @@ User request:
         db,
         conversation,
     ):
-        """
-        Retrieve the current unfinished workflow
-        from PostgreSQL.
-        """
 
         try:
+
             return ConversationService.get_active_workflow(
                 db=db,
                 conversation=conversation,
             )
+
         except Exception:
+
             return None
 
     def _create_workflow(
@@ -2915,9 +4330,6 @@ User request:
         required_field: str | None = None,
         collected_data: dict | None = None,
     ):
-        """
-        Create a new generic persistent workflow.
-        """
 
         return ConversationService.create_workflow(
             db=db,
@@ -2937,9 +4349,6 @@ User request:
         required_field: str | None = None,
         collected_data: dict | None = None,
     ):
-        """
-        Update an existing persistent workflow.
-        """
 
         return ConversationService.update_workflow(
             db=db,
@@ -2954,9 +4363,6 @@ User request:
         db,
         workflow,
     ):
-        """
-        Mark the current workflow as completed.
-        """
 
         return ConversationService.complete_workflow(
             db=db,
@@ -2968,14 +4374,12 @@ User request:
         db,
         workflow,
     ):
-        """
-        Mark the current workflow as cancelled.
-        """
 
         return ConversationService.cancel_workflow(
             db=db,
             workflow=workflow,
         )
+
     # =========================================================
     # ACTIVE WORKFLOW RESOLUTION
     # =========================================================
@@ -2986,12 +4390,6 @@ User request:
         conversation,
         user_text: str,
     ) -> dict[str, Any] | None:
-        """
-        Resume an existing persistent workflow.
-
-        This method only handles workflow state.
-        It does not execute Gmail operations.
-        """
 
         workflow = self._get_active_workflow(
             db=db,
@@ -3021,6 +4419,7 @@ User request:
         )
 
         if not value:
+
             return {
                 "success": False,
                 "intent": GmailIntent.UNKNOWN.value,
@@ -3035,7 +4434,9 @@ User request:
                 "state": self.state.to_dict(),
             }
 
-        collected_data[required_field] = value
+        collected_data[
+            required_field
+        ] = value
 
         self._update_workflow(
             db=db,
@@ -3058,6 +4459,7 @@ User request:
             ),
             "state": self.state.to_dict(),
         }
+
     # =========================================================
     # WORKFLOW VALUE EXTRACTION
     # =========================================================
@@ -3067,12 +4469,6 @@ User request:
         user_text: str,
         field_name: str,
     ) -> str:
-        """
-        Extract a simple value supplied by the user.
-
-        This remains generic and does not know anything
-        about a particular business domain.
-        """
 
         text = (
             user_text or ""
@@ -3089,7 +4485,10 @@ User request:
         ).strip()
 
         field_label = (
-            field_name.replace("_", " ")
+            field_name.replace(
+                "_",
+                " ",
+            )
         )
 
         pattern = (
@@ -3105,12 +4504,82 @@ User request:
         )
 
         if match:
-            value = match.group(1).strip()
+
+            value = (
+                match.group(1)
+                .strip()
+            )
 
             if value:
                 return value
 
         return cleaned
+    def _handle_business_email(
+        self,
+        email: dict[str, Any],
+    ) -> dict[str, Any]:
+        """
+        Process an incoming business/customer email.
+    
+        Flow:
+    
+            Gmail
+              ↓
+            Business Agent
+              ↓
+            Knowledge Base
+              ↓
+            Identifier extraction
+              ↓
+            Database
+              ↓
+            Reply / Clarification
+        """
+    
+        try:
+    
+            result = business_agent.process_email(
+                email=email,
+            )
+    
+            return {
+                "success": True,
+                "intent": "business_email",
+                "result": result,
+                "user_message": result.get(
+                    "reply",
+                    "",
+                ),
+                "state": self.state.to_dict(),
+            }
+    
+        except ValueError as exc:
+    
+            return {
+                "success": False,
+                "intent": "business_email",
+                "error": str(exc),
+                "user_message": (
+                    "I couldn't process this business email."
+                ),
+                "state": self.state.to_dict(),
+            }
+    
+        except Exception as exc:
+    
+            logger.exception(
+                "Business email processing failed."
+            )
+    
+            return {
+                "success": False,
+                "intent": "business_email",
+                "error": str(exc),
+                "user_message": (
+                    "I couldn't process this email right now."
+                ),
+                "state": self.state.to_dict(),
+            }
 
 # =============================================================
 # SHARED ORCHESTRATOR

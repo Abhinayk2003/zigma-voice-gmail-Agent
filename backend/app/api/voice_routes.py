@@ -139,6 +139,7 @@ async def _process_agent_request(
     user_text: str,
     account_email: str,
     language_code: str | None = None,
+    generate_tts: bool = True,
 ) -> None:
     """
     Process one Gmail agent request.
@@ -1107,6 +1108,7 @@ async def voice_websocket(
                     user_text=user_text,
                     account_email=account_email,
                     language_code=None,
+                    generate_tts=False,
                 )
 
                 continue

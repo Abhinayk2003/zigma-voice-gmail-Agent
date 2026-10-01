@@ -86,6 +86,8 @@ class Settings(BaseSettings):
     llm_temperature: float = 0.1
 
     llm_top_p: float = 0.9
+    
+    bedrock_kb_id: str = "YGGHKQNT8C"
 
     # =========================================================
     # Google / Gmail OAuth

@@ -1,0 +1,203 @@
+{
+  "companies": [
+    {
+      "company_code": "demo_company",
+      "company_name": "Demo Company",
+      "domain": "demo-company.com",
+      "active": true,
+      "metadata_json": {
+        "industry": "ecommerce",
+        "support_enabled": true
+      }
+    }
+  ],
+  "customers": [
+    {
+      "company_code": "demo_company",
+      "customer_id": "CUS-10001",
+      "name": "Rahul Sharma",
+      "email": "rahul@example.com",
+      "phone": "+91-9000000001",
+      "address": "Hyderabad, Telangana",
+      "status": "active",
+      "metadata_json": {
+        "customer_type": "regular"
+      }
+    },
+    {
+      "company_code": "demo_company",
+      "customer_id": "CUS-10002",
+      "name": "Priya Reddy",
+      "email": "priya@example.com",
+      "phone": "+91-9000000002",
+      "address": "Bengaluru, Karnataka",
+      "status": "active",
+      "metadata_json": {
+        "customer_type": "premium"
+      }
+    },
+    {
+      "company_code": "demo_company",
+      "customer_id": "CUS-10003",
+      "name": "Arjun Kumar",
+      "email": "arjun@example.com",
+      "phone": "+91-9000000003",
+      "address": "Chennai, Tamil Nadu",
+      "status": "active",
+      "metadata_json": {
+        "customer_type": "regular"
+      }
+    }
+  ],
+  "orders": [
+    {
+      "company_code": "demo_company",
+      "customer_id": "CUS-10001",
+      "order_id": "ORD-10001",
+      "external_reference": "WEB-10001",
+      "status": "shipped",
+      "payment_status": "paid",
+      "fulfillment_status": "shipped",
+      "currency": "INR",
+      "total_amount": "2499.00",
+      "shipping_address": "Hyderabad, Telangana",
+      "tracking_number": "TRK-10001",
+      "estimated_delivery": "2026-09-13T12:00:00+00:00",
+      "delivered_at": null,
+      "cancellation_eligible": false,
+      "refund_eligible": true,
+      "return_eligible": true,
+      "created_by": "system",
+      "updated_by": "system",
+      "is_active": true,
+      "source_system": "ecommerce",
+      "last_verified_at": "2026-09-11T10:00:00+00:00",
+      "metadata_json": {
+        "payment_method": "card",
+        "priority": "normal"
+      }
+    },
+    {
+      "company_code": "demo_company",
+      "customer_id": "CUS-10002",
+      "order_id": "ORD-10002",
+      "external_reference": "WEB-10002",
+      "status": "processing",
+      "payment_status": "paid",
+      "fulfillment_status": "processing",
+      "currency": "INR",
+      "total_amount": "1599.00",
+      "shipping_address": "Bengaluru, Karnataka",
+      "tracking_number": null,
+      "estimated_delivery": "2026-09-16T12:00:00+00:00",
+      "delivered_at": null,
+      "cancellation_eligible": true,
+      "refund_eligible": false,
+      "return_eligible": false,
+      "created_by": "system",
+      "updated_by": "system",
+      "is_active": true,
+      "source_system": "ecommerce",
+      "last_verified_at": "2026-09-11T10:00:00+00:00",
+      "metadata_json": {
+        "payment_method": "upi",
+        "priority": "normal"
+      }
+    },
+    {
+      "company_code": "demo_company",
+      "customer_id": "CUS-10003",
+      "order_id": "ORD-10003",
+      "external_reference": "WEB-10003",
+      "status": "delivered",
+      "payment_status": "paid",
+      "fulfillment_status": "delivered",
+      "currency": "INR",
+      "total_amount": "4999.00",
+      "shipping_address": "Chennai, Tamil Nadu",
+      "tracking_number": "TRK-10003",
+      "estimated_delivery": "2026-09-08T12:00:00+00:00",
+      "delivered_at": "2026-09-08T15:30:00+00:00",
+      "cancellation_eligible": false,
+      "refund_eligible": true,
+      "return_eligible": true,
+      "created_by": "system",
+      "updated_by": "system",
+      "is_active": true,
+      "source_system": "ecommerce",
+      "last_verified_at": "2026-09-11T10:00:00+00:00",
+      "metadata_json": {
+        "payment_method": "netbanking",
+        "priority": "high"
+      }
+    }
+  ],
+  "order_items": [
+    {
+      "company_code": "demo_company",
+      "order_id": "ORD-10001",
+      "product_id": "PROD-001",
+      "product_name": "Wireless Headphones",
+      "quantity": 1,
+      "unit_price": "2499.00"
+    },
+    {
+      "company_code": "demo_company",
+      "order_id": "ORD-10002",
+      "product_id": "PROD-002",
+      "product_name": "Smart Watch",
+      "quantity": 1,
+      "unit_price": "1599.00"
+    },
+    {
+      "company_code": "demo_company",
+      "order_id": "ORD-10003",
+      "product_id": "PROD-003",
+      "product_name": "Laptop Backpack",
+      "quantity": 1,
+      "unit_price": "4999.00"
+    }
+  ],
+  "order_events": [
+    {
+      "company_code": "demo_company",
+      "order_id": "ORD-10001",
+      "event_type": "order_shipped",
+      "description": "Order shipped from warehouse.",
+      "event_at": "2026-09-11T08:00:00+00:00",
+      "metadata_json": {
+        "location": "Hyderabad Warehouse"
+      }
+    },
+    {
+      "company_code": "demo_company",
+      "order_id": "ORD-10001",
+      "event_type": "package_in_transit",
+      "description": "Package is currently in transit.",
+      "event_at": "2026-09-11T10:00:00+00:00",
+      "metadata_json": {
+        "carrier_status": "in_transit"
+      }
+    },
+    {
+      "company_code": "demo_company",
+      "order_id": "ORD-10002",
+      "event_type": "order_confirmed",
+      "description": "Order confirmed and being processed.",
+      "event_at": "2026-09-11T07:30:00+00:00",
+      "metadata_json": {
+        "warehouse": "Bengaluru Warehouse"
+      }
+    },
+    {
+      "company_code": "demo_company",
+      "order_id": "ORD-10003",
+      "event_type": "order_delivered",
+      "description": "Order successfully delivered to customer.",
+      "event_at": "2026-09-08T15:30:00+00:00",
+      "metadata_json": {
+        "delivery_status": "completed"
+      }
+    }
+  ]
+}
